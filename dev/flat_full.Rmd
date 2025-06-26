@@ -86,21 +86,126 @@ con <- DBI::dbConnect(RPostgres::Postgres(),
                      chemin=list.files(dossier, pattern = ".csv", full.names=TRUE))
 
 
-lire_fichier<-function(i)
-{
-  annee<-substr(fichiers$nom[i], 11,14)
-  ajout<-readr::read_delim(fichiers$chemin[i],
-                           show_col_types = FALSE)
-  names(ajout)[names(ajout)==paste0("Etat de agglom\u00e9ration en ", annee)]<-"Etat_de_agglom\u00e9ration"
-  names(ajout)[names(ajout)==paste0("Etat du STEU en ", annee)]<-"Etat_du_STEU"
-  names(ajout)[names(ajout)==paste0("Conformit\u00e9 ERU \u00e9quipement STEU au 31/12/", annee)]<-"Conformit\u00e9_ERU_\u00e9quipement_STEU_au_31/12"
-  names(ajout)[names(ajout)==paste0("Conformit\u00e9 ERU \u00e9quipement STEU pr\u00e9visionelle au 31/12/", annee)]<-"Conformit\u00e9_ERU_\u00e9quipement_STEU_pr\u00e9visionnelle_au_31/12"
-  ajout$annee<-annee
+lire_fichier <- function(i) {
+  # Année extraite du nom du fichier
+  annee <- substr(fichiers$nom[i], nchar(fichiers$nom[i])-7, nchar(fichiers$nom[i])-4)
+
+ 
+# Lecture des noms de colonnes bruts
+  noms_colonnes <- readLines(fichiers$chemin[i], n = 1, encoding = "UTF-8")
+ noms_colonnes <- strsplit(noms_colonnes, "\\|")[[1]] # séparateur = barre verticale
+noms_colonnes <- gsub('^"|"$', '', noms_colonnes) # supprimer les guillemets autour
+noms_colonnes <- trimws(noms_colonnes)  # supprimer les espaces en trop
+
+ # Lecture du fichier sans noms de colonnes
+ajout <- readr::read_delim(
+  fichiers$chemin[i],
+  delim = "|",
+  skip = 1,
+  col_names = FALSE,
+  quote = "\"",
+  show_col_types = FALSE
+)
+
+names(ajout)<-noms_colonnes
+
+  problemes <- readr::problems(ajout)
+if (nrow(problemes) > 0) {
+  print(problemes)
+}
+
+    # Suppression des colonnes strictement doublonnées (même nom et même contenu)
+ajout <- ajout[, !duplicated(as.list(ajout))]
+
+names(ajout) <- gsub("≥", "sup", names(ajout))
+names(ajout) <- gsub("<", "inf", names(ajout))
+  
+  # Harmonisation des noms de colonnes géographiques du rejet
+# Nettoyage des noms de colonnes
+names(ajout) <- make.names(names(ajout), unique = TRUE)
+ # supprime les suffixes ...48
+# Supprimer les suffixes ...n uniquement si cela ne crée pas de doublon
+noms_orig <- names(ajout)
+noms_sans_suffixe <- gsub("\\.\\.\\.[0-9]+$", "", noms_orig)
+
+# Identifier les doublons qui apparaîtraient après suppression
+doublons <- duplicated(noms_sans_suffixe) | duplicated(noms_sans_suffixe, fromLast = TRUE)
+
+# Conserver les noms originaux là où un doublon apparaîtrait
+names(ajout) <- ifelse(doublons, noms_orig, noms_sans_suffixe)
+names(ajout) <- gsub("é", "e", names(ajout))
+names(ajout) <- gsub("è", "e", names(ajout))
+names(ajout) <- gsub("à", "a", names(ajout))
+names(ajout) <- gsub("ù", "u", names(ajout))
+names(ajout) <- gsub("ç", "c", names(ajout))
+names(ajout) <- gsub("[^[:alnum:]_]", "_", names(ajout))
+names(ajout) <- tolower(names(ajout))
+
+# Harmonisation des noms de colonnes géographiques du STEU (2023 vs années précédentes)
+if ("longitude_du_steu_wgs84" %in% names(ajout) == FALSE &&
+    any(grepl("longitude.*steu.*wgs84", names(ajout)))) {
+  names(ajout)[grepl("longitude.*steu.*wgs84", names(ajout))] <- "longitude_du_steu_wgs84"
+}
+if ("latitude_du_steu_wgs84" %in% names(ajout) == FALSE &&
+    any(grepl("latitude.*steu.*wgs84", names(ajout)))) {
+  names(ajout)[grepl("latitude.*steu.*wgs84", names(ajout))] <- "latitude_du_steu_wgs84"
+}
+
+# Harmonisation des noms de colonnes géographiques du rejet
+if ("longitude_du_rejet_wgs84" %in% names(ajout) == FALSE &&
+    any(grepl("longitude.*rejet.*wgs84", names(ajout)))) {
+  names(ajout)[grepl("longitude.*rejet.*wgs84", names(ajout))] <- "longitude_du_rejet_wgs84"
+}
+if ("latitude_du_rejet_wgs84" %in% names(ajout) == FALSE &&
+    any(grepl("latitude.*rejet.*wgs84", names(ajout)))) {
+  names(ajout)[grepl("latitude.*rejet.*wgs84", names(ajout))] <- "latitude_du_rejet_wgs84"
+}
+
+# homogénéisation des noms de colonnes 2023 et suivants par rapport à avant
+ names(ajout)[names(ajout) == "conformite_reglementaire_equipement_steu"] <- "conformite_eru_equipement_steu"
+names(ajout)[names(ajout) == "conformite_reglementaire_steu_perf_dbo"] <- "conformite_eru_steu_perf_dbo"
+names(ajout)[names(ajout) == "conformite_reglementaire_steu_perf_dco"] <- "conformite_eru_steu_perf_dco"
+names(ajout)[names(ajout) == "conformite_reglementaire_steu_perf_ngl"] <- "conformite_eru_steu_perf_ngl"
+names(ajout)[names(ajout) == "conformite_reglementaire_steu_perf_pt"] <- "conformite_eru_steu_perf_pt"
+names(ajout)[names(ajout) == "conformite_globale_steu_reglementaire_performances"] <- "conformite_globale_eru_performances"
+# on renseigne à "" les données qui n'existent plus à partir de 2023
+if(!"conformite_collecte_agglo_temps_sec" %in% names(ajout)){ajout$conformite_collecte_agglo_temps_sec<-""}
+if(!"date_mise_en_conformite_collecte_temps_sec" %in% names(ajout)){ajout$date_mise_en_conformite_collecte_temps_sec<-NA}  
+  
+  # Renommer les colonnes pour les rendre homogènes
+  names(ajout)[names(ajout) == paste0("Etat de agglom\u00e9ration en ", annee)] <- "Etat_de_agglom\u00e9ration"
+  names(ajout)[names(ajout) == paste0("Etat du STEU en ", annee)] <- "Etat_du_STEU"
+  names(ajout)[names(ajout) == paste0("Conformit\u00e9 ERU \u00e9quipement STEU au 31/12/", annee)] <- "Conformit\u00e9_ERU_\u00e9quipement_STEU_au_31/12"
+  names(ajout)[names(ajout) == paste0("Conformit\u00e9 ERU \u00e9quipement STEU pr\u00e9visionelle au 31/12/", annee)] <- "Conformit\u00e9_ERU_\u00e9quipement_STEU_pr\u00e9visionnelle_au_31/12"
+
+
+  # Ajouter la colonne année
+  ajout$annee <- annee
+
   return(ajout)
 }
 
-df_final<-purrr::map(seq_along(fichiers$nom), lire_fichier)
-df_final<-dplyr::bind_rows(df_final)
+
+
+# Lecture de tous les fichiers avec la mise en forme initiale
+df_list <- purrr::map(seq_along(fichiers$nom), lire_fichier)
+
+# Obtenir la liste complète des colonnes uniques à travers tous les fichiers
+colonnes_completes <- purrr::reduce(purrr::map(df_list, names), union)
+
+# Ajouter les colonnes manquantes dans chaque dataframe
+df_list_harmonise <- purrr::map(df_list, function(df) {
+  colonnes_manquantes <- setdiff(colonnes_completes, names(df))
+  df[colonnes_manquantes] <- NA
+  return(df)
+})
+
+# Fusionner les dataframes harmonisés
+df_final <- dplyr::bind_rows(df_list_harmonise)
+
+# suppression descolonnes en doublon
+df_final <- df_final[, !duplicated(names(df_final))]
+
 
 colnames(df_final) <- gsub(" ", "_", colnames(df_final))
 colnames(df_final) <- gsub("\"", "", colnames(df_final))
@@ -121,17 +226,46 @@ colnames(df_final) <- gsub("-", "_", colnames(df_final))
 colnames(df_final) <- tolower(colnames(df_final))
 
 
-df_final<-df_final%>%subset(!is.na(longitude_du_steu_wgs84) & 
-                              !is.na(latitude_du_steu_wgs84))%>%
-  subset(!is.na(longitude_du_rejet_wgs84) & 
-                              !is.na(latitude_du_rejet_wgs84))
+colonnes_geo <- c("longitude_du_steu_wgs84", "latitude_du_steu_wgs84", "longitude_du_rejet_wgs84", "latitude_du_rejet_wgs84")
+colonnes_geo <- colonnes_geo[colonnes_geo %in% names(df_final)]
 
-	
+if (length(colonnes_geo) == 4) {
+  df_final <- df_final %>%
+    subset(!is.na(longitude_du_steu_wgs84) & !is.na(latitude_du_steu_wgs84)) %>%
+    subset(!is.na(longitude_du_rejet_wgs84) & !is.na(latitude_du_rejet_wgs84))
+} else {
+  warning("Colonnes géographiques manquantes : ", paste(setdiff(c("longitude_du_steu_wgs84", "latitude_du_steu_wgs84", "longitude_du_rejet_wgs84", "latitude_du_rejet_wgs84"), colonnes_geo), collapse = ", "))
+}
+
+
+
 df_final$date_de_mise_hors_serv_du_steu[df_final$date_de_mise_hors_serv_du_steu=="1899-12-30"]<-NA
 
-df_sf <- sf::st_as_sf(df_final, 
-                      coords = c("longitude_du_steu_wgs84", 
-                                 "latitude_du_steu_wgs84"), 
+# renommage des noms de colonnes
+# Fonction pour tronquer les noms de colonnes à 63 caractères
+truncate_names <- function(names_vec) {
+  substr(names_vec, 1, 63)
+}
+
+# Appliquer la fonction sur le dataframe
+colnames(df_final) <- truncate_names(colnames(df_final))
+
+# ajout de la colonne etat_du_steu
+# Identifier les colonnes correspondant au motif
+cols_to_concat <- grep("etat_du_steu", names(df_final), value = TRUE)
+
+
+# Remplacer les NA par des chaînes vides
+df_final[cols_to_concat] <- lapply(df_final[cols_to_concat], function(x) ifelse(is.na(x), "", x))
+
+# Concaténer les valeurs ligne par ligne
+df_final$etat_du_steu <- apply(df_final[cols_to_concat], 1, paste, collapse = "")
+
+df_final<-df_final%>%dplyr::select(-dplyr::all_of(cols_to_concat))
+
+df_sf <- sf::st_as_sf(df_final,
+                      coords = c("longitude_du_steu_wgs84",
+                                 "latitude_du_steu_wgs84"),
                       crs = 4326)
 df_sf<-sf::st_transform(df_sf, crs=2154)
 ##### ENREGISTREMENT DU RESULTAT (DONNEES FR) DANS GEOGWILEN #####
@@ -142,12 +276,16 @@ try(DBI::dbRemoveTable(con, table_id))
 
 # Créer une table postgis avec un index spatial
 
+
+
 # Créer la requête SQL pour créer la table postgis
-sql_create_table <- paste0("CREATE TABLE m621_step.bdd_step_fr (",
-                           "id SERIAL PRIMARY KEY,",
-                           "geometry GEOMETRY,",
-                           paste(paste0(colnames(df_sf)[colnames(df_sf)!="geometry"], " TEXT"), collapse = ", "),
-                           ")")
+sql_create_table <- paste0(
+  "CREATE TABLE m621_step.bdd_step_fr (",
+  "id SERIAL PRIMARY KEY,",
+  "geometry GEOMETRY,",
+  paste(paste0("\"", colnames(df_sf)[colnames(df_sf) != "geometry"], "\" TEXT"), collapse = ", "),
+  ")"
+)
 
 
 DBI::dbSendQuery(con, sql_create_table)
@@ -193,7 +331,16 @@ DBI::dbSendQuery(con, paste0("COMMENT ON TABLE m621_step.bdd_step_fr IS '{
 ##### Mise en forme des données sur BV Vilaine #####
 
 ##### donnees XY STEP ####
-data(sage_vilaine, package="gwilenalim")
+env <- new.env()
+data("sage_vilaine", package = "gwilenalim", envir = env)
+
+if (!"sage_vilaine" %in% ls(env)) {
+  stop("L'objet 'sage_vilaine' n'a pas été trouvé dans le package.")
+}
+
+sage_vilaine <- env$sage_vilaine
+
+
 sage_vilaine<-sf::st_transform(sage_vilaine, 2154)
 
 df_sf<-df_sf[sage_vilaine,]%>%
@@ -437,31 +584,35 @@ df_final$filiere_eau_simplifiee <- ifelse(grepl("(?i)boue activée", df_final$fi
                               ifelse(grepl("(?i)lagunage", df_final$filiere_eau_principale), "Lagunage",
                                      df_final$filiere_eau_principale))
 
+names(df_final)[grepl("niveau", names(df_final))]
+
 r621_ouvrages_ous<-df_final%>%
   dplyr::select(code_du_steu,
                 nom_du_steu,
                 nature_du_steu,
                 etat_du_steu,
-              date_de_mise_en_service_du_steu,
+                date_de_mise_en_service_du_steu,
                 date_de_mise_hors_serv_du_steu,
-              capacite_nominale_en_eh,
-              capacite_nominale_en_kg_de_dbo5,
-              debit_de_reference_en_m3_j,
-              filiere_eau_principale,
-              filiere_eau_simplifiee,
-              filiere_boues_principale,
-              date_derniere_modification_steu,
-              nom_du_milieu_de_rejet,
-              nom_du_bassin_versant,
-              niveau_traitement_existant_biologique,
-              niveau_traitement_existant_azote,
-              niveau_traitement_existant_phosphore,
-              niveau_traitement_existant_desinfection,
-              type_de_reseau_majoritaire,
-              code_de_masse_eau,
-              nom_de_la_masse_eau,
-              annee
-               )%>%
+                capacite_nominale_en_eh,
+                capacite_nominale_en_kg_de_dbo5,
+                filiere_eau_principale,
+                filiere_eau_simplifiee,
+                filiere_boues_principale,
+                date_derniere_modification_steu,
+                nom_du_milieu_de_rejet,
+                nom_du_bassin_versant,
+                niveau_traitement_existant__biologique,
+                niveau_traitement_existant__azote,
+                niveau_traitement_existant__phosphore,
+                niveau_traitement_existant__desinfection,
+                niveau_traitement_requis_eru__biologique,
+                niveau_traitement_requis_eru__azote,
+                niveau_traitement_requis_eru__phosphore,
+                type_de_reseau_majoritaire,
+                code_de_masse_eau,
+                nom_de_la_masse_eau,
+                annee
+                )%>%
   subset(`code_du_steu`%in% df_sf$`code_du_steu`)
 
 r621_ouvrages_ous <- r621_ouvrages_ous %>%
@@ -503,8 +654,8 @@ sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.nom_du_ste
 DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.nature_du_steu IS 'Type de STEP (urbaine, industrielle ou mixte)';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-paste0("COMMENT ON COLUMN r621_step.r621_ouvrages_ous.etat_du_steu IS 'Indicateur si la STEP était en service au 31/12/",max(df_sf$annee),"';")
-DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-paste0("COMMENT ON COLUMN r621_step.r621_ouvrages_ous.etat_du_steu IS 'Indicateur si la STEP était en service au 31/12/",max(df_sf$annee),"';")
+# DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-paste0("COMMENT ON COLUMN r621_step.r621_ouvrages_ous.date_de_mise_en_service_du_steu IS 'Date de mise en service de la station';")
 DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-paste0("COMMENT ON COLUMN r621_step.r621_ouvrages_ous.date_de_mise_hors_serv_du_steu IS 'Date de mise hors service de la station (NA signifie que la STEP est en service)';")
@@ -513,8 +664,8 @@ sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.capacite_n
 DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.capacite_nominale_en_kg_de_dbo5 IS 'Capacité nominale de la STEP exprimée en équivalent habitant';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.debit_de_reference_en_m3_j IS 'Débit de référence = débit que la STEP doit pouvoir traiter sans déverser d''eau brute au milieu naturel (voir https://www.gers.gouv.fr/content/download/15569/122118/file/Debit%20de%20reference_v221_juin2012.pdf)';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.debit_de_reference_en_m3_j IS 'Débit de référence = débit que la STEP doit pouvoir traiter sans déverser d''eau brute au milieu naturel (voir https://www.gers.gouv.fr/content/download/15569/122118/file/Debit%20de%20reference_v221_juin2012.pdf)';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.filiere_eau_principale IS 'Filière de traitement des eaux';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
 
@@ -527,22 +678,22 @@ sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.nom_du_mil
 DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.nom_du_bassin_versant IS 'Bassin versant d''implantation de la STEP';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.niveau_traitement_existant_biologique IS 'Niveau de traitement biologique. Voir https://www.eaufrance.fr/lassainissement-des-eaux-usees-domestiques';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.niveau_traitement_existant_azote IS 'Traitement conçu pour éliminer l''azote (si NA absence de traitement de l''azote)';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.niveau_traitement_existant_phosphore IS 'Traitement conçu pour éliminer le phosphore (si NA absence de traitement du phosphore)';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.niveau_traitement_existant_desinfection IS 'Traitement conçu pour éliminer la charge bactériologique (si NA absence de traitement dédié)';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.type_de_reseau_majoritaire IS 'Type de réseau majoritairement raccordé à la STEP';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.code_de_masse_eau IS 'Code de la masse d''eau réceptrice des rejets de la STEP selon la DDTM';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.nom_de_la_masse_eau IS 'Nom de la masse d''eau réceptrice des rejets de la STEP selon la DDTM';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.annee IS 'Année des données';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.niveau_traitement_existant_biologique IS 'Niveau de traitement biologique. Voir https://www.eaufrance.fr/lassainissement-des-eaux-usees-domestiques';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.niveau_traitement_existant_azote IS 'Traitement conçu pour éliminer l''azote (si NA absence de traitement de l''azote)';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.niveau_traitement_existant_phosphore IS 'Traitement conçu pour éliminer le phosphore (si NA absence de traitement du phosphore)';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.niveau_traitement_existant_desinfection IS 'Traitement conçu pour éliminer la charge bactériologique (si NA absence de traitement dédié)';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.type_de_reseau_majoritaire IS 'Type de réseau majoritairement raccordé à la STEP';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.code_de_masse_eau IS 'Code de la masse d''eau réceptrice des rejets de la STEP selon la DDTM';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.nom_de_la_masse_eau IS 'Nom de la masse d''eau réceptrice des rejets de la STEP selon la DDTM';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_ouvrages_ous.annee IS 'Année des données';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
 
 
 # Insérer l'objet sf dans la table postgis
@@ -586,12 +737,11 @@ r621_conformite_cos<-df_final%>%
   dplyr::select(code_du_steu,
                 nom_du_steu,
                 annee,
-                taille_agglomeration_eh,
+                taille_agglomeration_eh_,
                 tranche_obligation,
-                charge_maximale_entrante_eh,
+                charge_maximale_entrante_eh_,
                 capacite_nominale_en_eh,
                 debit_entrant_en_m3_j,
-                debit_de_reference_en_m3_j,
                 percentile95_calcule_en_m3_j,
                 conformite_globale_agglo,
                 cause_de_non_conformite,
@@ -599,17 +749,17 @@ r621_conformite_cos<-df_final%>%
                 conformite_en_performance_agglo,
                 conformite_collecte_agglo_temps_sec,
                 conformite_collecte_agglo,
-                conformite_eru_perf_dbo,
-                conformite_eru_perf_dco,
-                conformite_eru_perf_ngl,
-                conformite_eru_perf_pt,
-                prod_boues_sans_reactif_tms_an
+                conformite_eru_steu_perf_dbo,
+                conformite_eru_steu_perf_dco,
+                conformite_eru_steu_perf_ngl,
+                conformite_eru_steu_perf_pt,
+                prod_boues_sans_reactif_tms_an_
                )%>%
   subset(`code_du_steu`%in% df_sf$`code_du_steu`)%>%
   unique()
 
 r621_conformite_cos<-dplyr::left_join(df_sf, r621_conformite_cos, by="code_du_steu")
- 
+
 
 table_id <- DBI::Id(schema = "r621_step",
                           table = "r621_conformite_cos")
@@ -635,16 +785,16 @@ sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.nom_du_s
 DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.annee IS 'Année de la donnée';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.taille_agglomeration_eh IS 'Taille de l''agglomération en équivalent habitant';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.taille_agglomeration_eh IS 'Taille de l''agglomération en équivalent habitant';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.tranche_obligation IS 'Catégorie dans laquelle est classée la station d''épuration pour évaluer sa conformité selon l''arrêté ministériel du 21 juillet 2015 modifié';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.charge_maximale_entrante_eh IS 'Charge maximale relevée dans l''année en entrée de STEP exprimée en équivalent habitants';"
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.charge_maximale_entrante_eh IS 'Charge maximale relevée dans l''année en entrée de STEP exprimée en équivalent habitants';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.capacite_nominale_en_eh IS 'Charge nominale de la STEP exprimée en équivalent-habitants';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.debit_de_reference_en_m3_j IS 'Débit de référence = débit que la STEP doit pouvoir traiter sans déverser d''eau brute au milieu naturel (voir https://www.gers.gouv.fr/content/download/15569/122118/file/Debit%20de%20reference_v221_juin2012.pdf)';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.debit_de_reference_en_m3_j IS 'Débit de référence = débit que la STEP doit pouvoir traiter sans déverser d''eau brute au milieu naturel (voir https://www.gers.gouv.fr/content/download/15569/122118/file/Debit%20de%20reference_v221_juin2012.pdf)';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.debit_entrant_en_m3_j IS 'Débit moyen entrant sur la STEP';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.percentile95_calcule_en_m3_j IS 'Percentile 95 des débits entrant sur la STEP - le débit de référence est en théorie calculé pour prendre en compte ce percentile 95';"
@@ -661,16 +811,16 @@ sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformi
 DBI::dbSendQuery(con, sql_commente_colonnes)
 sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_collecte_agglo IS 'Les performances du réseau de collecte sont conformes à la réglementation en temps sec et en temps de pluie';"
 DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_eru_perf_dbo IS 'Les performances de la STEP sur le traitement de la DBO5 sont conformes à la réglementation';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_eru_perf_dco IS 'Les performances de la STEP sur le traitement de la DCO sont conformes à la réglementation';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_eru_perf_ngl IS 'Les performances de la STEP sur le traitement de l''azote sont conformes à la réglementation';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_eru_perf_pt IS 'Les performances de la STEP sur le traitement du phosphore sont conformes à la réglementation';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
-sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.prod_boues_sans_reactif_tms_an IS 'Production de boues en tonne de matière sèche par an';"
-DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_eru_perf_dbo IS 'Les performances de la STEP sur le traitement de la DBO5 sont conformes à la réglementation';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_eru_perf_dco IS 'Les performances de la STEP sur le traitement de la DCO sont conformes à la réglementation';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_eru_perf_ngl IS 'Les performances de la STEP sur le traitement de l''azote sont conformes à la réglementation';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.conformite_eru_perf_pt IS 'Les performances de la STEP sur le traitement du phosphore sont conformes à la réglementation';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
+# sql_commente_colonnes<-"COMMENT ON COLUMN r621_step.r621_conformite_cos.prod_boues_sans_reactif_tms_an IS 'Production de boues en tonne de matière sèche par an';"
+# DBI::dbSendQuery(con, sql_commente_colonnes)
 
 
 # Insérer l'objet sf dans la table postgis
@@ -905,7 +1055,15 @@ DBI::dbSendQuery(con, paste0("COMMENT ON TABLE m621_step.flux_redevances_indus_a
 
 ##### ENREGISTREMENT DU RESULTAT FILTRE SUR LE BASSIN DE LA VILAINE DANS GEOGWILEN #####
 
-    data(sage_vilaine, package="gwilenalim")
+env_local <- new.env()
+data("sage_vilaine", package = "gwilenalim", envir = env_local)
+
+if (!"sage_vilaine" %in% ls(env_local)) {
+  stop("L'objet 'sage_vilaine' n'a pas été trouvé dans le package.")
+}
+
+sage_vilaine <- env_local$sage_vilaine
+
 sage_vilaine<-sf::st_transform(sage_vilaine, 2154)
 
 data<-data[sage_vilaine,]

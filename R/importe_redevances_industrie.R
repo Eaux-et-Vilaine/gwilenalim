@@ -45,7 +45,7 @@ con <- DBI::dbConnect(RPostgres::Postgres(),
                       dbname = config$dbname)
   
 
-##### ENREGISTREMENT DU RESULTAT (DONNEES FR) DANS GEOGWILEN #####
+##### ENREGISTREMENT DU RESULTAT (DONNEES AELB) DANS GEOGWILEN #####
 table_id <- DBI::Id(schema = "m621_step",
                           table = "flux_redevances_indus_aelb")
 
@@ -97,6 +97,81 @@ DBI::dbSendQuery(con, paste0("COMMENT ON TABLE m621_step.flux_redevances_indus_a
     \"URL\": \"https://donnees-documents.eau-loire-bretagne.fr/home/donnees/flux-de-pollution---industries.html\"
   }]
 }'"))
+
+
+##### ENREGISTREMENT DU RESULTAT FILTRE SUR LE BASSIN DE LA VILAINE DANS GEOGWILEN #####
+
+env_local <- new.env()
+data("sage_vilaine", package = "gwilenalim", envir = env_local)
+
+if (!"sage_vilaine" %in% ls(env_local)) {
+  stop("L'objet 'sage_vilaine' n'a pas été trouvé dans le package.")
+}
+
+sage_vilaine <- env_local$sage_vilaine
+
+sage_vilaine<-sf::st_transform(sage_vilaine, 2154)
+
+data<-data[sage_vilaine,]
+
+for (i in unique(data$annee_redevance))
+{
+data_i<-subset(data, annee_redevance==i)
+  
+table_id <- DBI::Id(schema = "r621_step",
+                          table = paste0("flux_redevances_indus_annee_", i))
+
+try(DBI::dbRemoveTable(con, table_id))
+
+# Créer une table postgis avec un index spatial
+
+# Créer la requête SQL pour créer la table postgis
+sql_create_table <- paste0("CREATE TABLE r621_step.flux_redevances_indus_annee_", i," (",
+                           "id SERIAL PRIMARY KEY,",
+                           "geometry GEOMETRY,",
+                           paste(paste0(colnames(data_i)[colnames(data_i)!="geometry"], " TEXT"), collapse = ", "),
+                           ")")
+
+
+DBI::dbSendQuery(con, sql_create_table)
+
+# Insérer l'objet sf dans la table postgis
+sf::st_write(data_i, 
+             con, 
+             table_id, 
+             driver = "PostgreSQL", 
+             append = TRUE)
+
+# Commenter la table postgis
+
+DBI::dbSendQuery(con, paste0("COMMENT ON TABLE r621_step.flux_redevances_indus_annee_", i," IS '{
+  \"Title\": \"Flux annuels de pollution déclarés par les industriels assujettis à la redevance pollution de l’eau d’origine non domestique, sur le bassin Loire-Bretagne.\",
+  \"Abstract\": \"Données extraites de https://donnees-documents.eau-loire-bretagne.fr/home/donnees/flux-de-pollution---industries.html pour le bassin Loire-Bretagne et importées sous geogwilen le ",format(Sys.Date(), "%d/%m/%Y"),"\",
+  \"Keywords\": [\"station d''épuration\",\"industrie\", \"assainissement\",\"redevance\"],
+  \"Categories\": [\"Données géographiques\"],
+  \"SpatialExtent\": {
+    \"xmin\": ",sf::st_bbox(data_i)$xmin,",
+    \"ymin\": ",sf::st_bbox(data_i)$ymin,",
+    \"xmax\": ",sf::st_bbox(data_i)$xmax,",
+    \"ymax\": ",sf::st_bbox(data_i)$ymax,",
+    \"srs\": \"EPSG:2154\"
+  },
+  \"TemporalExtent\": {
+    \"Begin\": \"",min(data_i$annee_redevance),"\",
+    \"End\": \"",max(data_i$annee_redevance),"\"
+  },
+  \"Contacts\": [{
+    \"Name\": \"Anthony DE BURGHRAVE\",
+    \"Email\": \"anthony.deburghrave@eaux-et-vilaine.bzh\"
+  }],
+  \"Links\": [{
+    \"Type\": \"website\",
+    \"URL\": \"https://donnees-documents.eau-loire-bretagne.fr/home/donnees/flux-de-pollution---industries.html\"
+  }]
+}'"))
+
+}
+
 
 
   return("OK")
